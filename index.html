@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ninja Dog Game</title>
+    <style>
+      body {
+        background-color: black;
+        margin: 0;
+        overflow-y: hidden;
+      }
+      /* Canvas dimensions are controlled in JS */
+      #canvas1 {
+        border: 5px solid black;
+        border-radius: 10px;
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+      }
+      #score {
+        color: white;
+        font-size: 35px;
+        font-family: 'Press Start 2P', cursive;
+        position: absolute;
+        top: 5%;
+        left: 22%;
+        transform: translate(-50%, -50%);
+        text-align: center;
+        font-weight: bold;
+      }
+      /* Semi-transparent game over text */
+      #gameState {
+        color: white;
+        font-size: 50px;
+        font-family: 'Press Start 2P', cursive;
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        text-align: center;
+        font-weight: bold;
+        background-color: rgba(0, 0, 0, 0.5);
+        border-radius: 10px;
+      }
+      /* Loading message styling */
+      #loading {
+        color: white;
+        font-size: 50px;
+        font-family: 'Press Start 2P', cursive;
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+      }
+    </style>
+  </head>
+  <body tabindex="0">
+    <!-- Display loading message until all images load -->
+    <div id="loading">Loading...</div>
+    <canvas id="canvas1"></canvas>
+    <h1 id="gameState"></h1>
+    <h1 id="score">Score: 0</h1>
+
+    <script>
+
+      window.addEventListener("keydown", function (e) {
+        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) {
+          e.preventDefault();
+        }
+      });
+
+      // Force focus on the body to capture keyboard events.
+      window.addEventListener("load", () => {
+        document.body.focus();
+        loadAllImages(startGame);
+      });
+
+      // --- CANVAS SETUP ---
+      const canvas = document.getElementById("canvas1");
+      const ctx = canvas.getContext("2d");
+      const width = canvas.width = 800;
+      const height = canvas.height = 700;
+
+      // --- GAME VARIABLES ---
+      let gameSpeed = 10;
+      let score = 0;
+      let gameOver = false;
+      let animationId;
+      let gameFrame = 0; // used for frame counting and difficulty adjustments
+
+      // DOM elements
+      const gameStateElem = document.getElementById("gameState");
+      const scoreElem = document.getElementById("score");
+      const loadingElem = document.getElementById("loading");
+
+      // --- IMAGE ASSETS ---
+      const bgLayer1 = new Image();
+      bgLayer1.src = "Layer1.png";
+      const bgLayer2 = new Image();
+      bgLayer2.src = "Layer2.png";
+      const bgLayer3 = new Image();
+      bgLayer3.src = "Layer3.png";
+      const bgLayer4 = new Image();
+      bgLayer4.src = "Layer4.png";
+      const bgLayer5 = new Image();
+      bgLayer5.src = "Layer5.png";
+      const dogImage = new Image();
+      dogImage.src = "Shadow_dog.png";
+
+      // --- PRELOADING SYSTEM ---
+      function loadAllImages(callback) {
+        const images = [bgLayer1, bgLayer2, bgLayer3, bgLayer4, bgLayer5, dogImage];
+        let loadedCount = 0;
+        images.forEach(img => {
+          if (img.complete) {
+            loadedCount++;
+            if (loadedCount === images.length) callback();
+          } else {
+            img.onload = () => {
+              loadedCount++;
+              if (loadedCount === images.length) callback();
+            };
+            img.onerror = () => {
+              console.error("Failed to load image:", img.src);
+              loadedCount++;
+              if (loadedCount === images.length) callback();
+            };
+          }
+        });
+      }
+
+      // --- PARALLAX LAYER CLASS ---
+      class Layer {
+        constructor(image, speedModifier) {
+          this.x = 0;
+          this.y = 0;
+          this.width = 2400;
+          this.height = 700;
+          this.x2 = this.width;
+          this.image = image;
+          this.speedModifier = speedModifier;
+          this.speed = gameSpeed * this.speedModifier;
+        }
+        update() {
+          this.speed = gameSpeed * this.speedModifier;
+          if (this.x <= -this.width) {
+            this.x = this.width + this.x2 - this.speed;
+          }
+          if (this.x2 <= -this.width) {
+            this.x2 = this.width + this.x - this.speed;
+          }
+          this.x -= this.speed;
+          this.x2 -= this.speed;
+        }
+        draw() {
+          ctx.drawImage(this.image, this.x, this.y, this.width, this.height);
+          ctx.drawImage(this.image, this.x2, this.y, this.width, this.height);
+        }
+      }
+
+      // Create parallax layers.
+      const layer1 = new Layer(bgLayer1, 0.2);
+      const layer2 = new Layer(bgLayer2, 0.4);
+      const layer3 = new Layer(bgLayer3, 0.6);
+      const layer4 = new Layer(bgLayer4, 0.8);
+      const layer5 = new Layer(bgLayer5, 1.0);
+      const gameObjects = [layer1, layer2, layer3, layer4, layer5];
+
+      // --- MAIN DOG VARIABLES (sprite animation) ---
+      let frameX = 0;
+      let frameY = 3;
+      let frameNumber = 6;
+      const spriteWidth = 575;
+      const spriteHeight = 523;
+      const frameControl = 4;
+
+      // Dog position & physics (drawn at x = 0, size 170×155)
+      let dogY = 430;
+      let dogVY = 0;
+      const gravity = 0.8;
+      // Dog collision: circle centered at (85, dogY + 77.5)
+      let dogRadius = 55;
+
+      // SITTING / RUNNING state
+      let isSitting = false;
+
+      // --- OBSTACLE VARIABLES (cause game over) ---
+      let obstacleX = 1500;
+      let obstacleVX = 16;
+      let obstacleSize = 70; // initial obstacle size (will change randomly)
+      let obstacleRadius = (obstacleSize / 2) + 5; // for collision (approximate as a circle)
+      const groundLevel = 585; // dog is drawn at y=430 with height=155
+      let obstacleY = groundLevel - obstacleSize; // so its bottom touches the ground
+      let obstaclePassed = false; // tracks if the obstacle has been passed by the dog
+
+      // --- DUST EFFECT VARIABLES ---
+      let dustParticles = [];
+      // New array for dog dust particles.
+      let dogDustParticles = [];
+
+      // --- COLLECTIBLE VARIABLES (in the air) ---
+      let collectibleX = 2500;
+      let collectibleVX = 16;
+      const collectibleSize = 50; // drawn as a circle
+      const collectibleRadius = collectibleSize / 2;
+      // Place collectible in the air (random y between 100 and groundLevel-200)
+      let collectibleY = Math.floor(Math.random() * (groundLevel - 350) + 200);
+
+      // --- MAIN ANIMATION LOOP ---
+      function animate() {
+        // Clear the canvas.
+        ctx.clearRect(0, 0, width, height);
+
+        // Increase difficulty over time every 500 frames.
+        if (gameFrame > 0 && gameFrame % 500 === 0) {
+          gameSpeed += 0.2;
+          obstacleVX += 0.2;
+          collectibleVX += 0.2;
+        }
+
+        if (!gameOver) {
+          // Update background layers.
+          gameObjects.forEach(layer => {
+            layer.update();
+          });
+          updateDogSprite();
+          updateObstacle();
+          updateCollectible();
+          animateFrames();
+          applyGravity();
+          // Check collisions.
+          obstacleCollisionCheck();
+          collectibleCollisionCheck();
+        }
+
+        // DRAW ORDER:
+        // 1. Draw the background.
+        gameObjects.forEach(layer => {
+          layer.draw();
+        });
+
+        // Update and draw obstacle dust particles.
+        updateDust();
+        drawDust();
+
+        // Draw the obstacle (black square on the ground).
+        ctx.fillStyle = "black";
+        ctx.fillRect(obstacleX, obstacleY, obstacleSize, obstacleSize);
+
+        // Draw the glowing collectible.
+        ctx.save();
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = "#02bcd1";
+        ctx.fillStyle = "#02bcd1";
+        ctx.beginPath();
+        ctx.arc(collectibleX + collectibleRadius, collectibleY + collectibleRadius, collectibleRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.closePath();
+        ctx.restore();
+
+        // --- DOG DUST EFFECT ---
+        // Generate dog dust only when running on the ground.
+        if (dogY === 430 && !isSitting && !gameOver && Math.random() < 0.5) {
+          generateDogDust();
+        }
+        updateDogDust();
+        drawDogDust();
+
+        // 4. Draw the dog sprite.
+        ctx.drawImage(
+          dogImage,
+          frameX * spriteWidth,
+          frameY * spriteHeight,
+          spriteWidth,
+          spriteHeight,
+          0,
+          dogY,
+          170,
+          155
+        );
+
+        gameFrame++;
+        if (!gameOver) {
+          animationId = requestAnimationFrame(animate);
+        }
+      }
+
+      // --- UPDATE FUNCTIONS ---
+      function updateDogSprite() {
+        if (dogY >= 430) {
+          // On the ground: set running or sitting animation.
+          dogY = 430;
+          if (isSitting) {
+            frameY = 5;
+            frameNumber = 4;
+          } else {
+            frameY = 3;
+            frameNumber = 6;
+          }
+        } else {
+          // In the air: use jump/fall frames.
+          frameY = 1;
+          frameNumber = 6;
+        }
+      }
+
+      function updateObstacle() {
+        obstacleX -= obstacleVX;
+        // Check if dog has passed the obstacle
+        if (!obstaclePassed && (obstacleX + obstacleSize) < 85) {
+          score += 1;
+          scoreElem.innerHTML = "Score: " + score;
+          obstaclePassed = true;
+        }
+        // Reset obstacle if it goes off-screen and randomize its size
+        if (obstacleX < -200) {
+          obstacleX = Math.floor(Math.random() * 800 + 800);
+          // Randomize size between 50 and 100 (adjust range as desired)
+          obstacleSize = Math.floor(Math.random() * 51) + 50;
+          obstacleRadius = (obstacleSize / 2) + 5;
+          obstacleY = groundLevel - obstacleSize;
+          obstaclePassed = false;
+        }
+        // Generate dust effect when the obstacle moves.
+        generateDust();
+      }
+
+      function updateCollectible() {
+        collectibleX -= collectibleVX;
+        if (collectibleX < -200) {
+          collectibleX = Math.floor(Math.random() * 800 + 800);
+          collectibleY = Math.floor(Math.random() * (groundLevel - 200) + 100);
+        }
+      }
+
+      // --- DUST EFFECT FUNCTIONS FOR OBSTACLES ---
+      function generateDust() {
+        if (Math.random() < 0.5) {
+          dustParticles.push({
+            x: obstacleX + obstacleSize / 2,
+            y: obstacleY + obstacleSize,
+            alpha: 1,
+            size: Math.random() * 10 + 5
+          });
+        }
+      }
+
+      function updateDust() {
+        for (let i = dustParticles.length - 1; i >= 0; i--) {
+          dustParticles[i].y += 1;
+          dustParticles[i].alpha -= 0.02;
+          if (dustParticles[i].alpha <= 0) {
+            dustParticles.splice(i, 1);
+          }
+        }
+      }
+
+      function drawDust() {
+        dustParticles.forEach(particle => {
+          ctx.fillStyle = `rgba(135, 135, 135, ${particle.alpha})`;
+          ctx.beginPath();
+          ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+
+      // --- DOG DUST FUNCTIONS ---
+      function generateDogDust() {
+        // Position near the dog's left foot (adjust as needed).
+        dogDustParticles.push({
+          x: 50,
+          y: dogY + 150,
+          alpha: 1,
+          size: Math.random() * 5 + 3
+        });
+      }
+
+      function updateDogDust() {
+        for (let i = dogDustParticles.length - 1; i >= 0; i--) {
+          // Drift slightly to the left and fade out.
+          dogDustParticles[i].x -= 0.5;
+          dogDustParticles[i].alpha -= 0.01;
+          if (dogDustParticles[i].alpha <= 0) {
+            dogDustParticles.splice(i, 1);
+          }
+        }
+      }
+
+      function drawDogDust() {
+        dogDustParticles.forEach(particle => {
+          ctx.fillStyle = `rgba(150, 150, 150, ${particle.alpha})`;
+          ctx.beginPath();
+          ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+
+      // --- COLLISION FUNCTIONS ---
+      // Collision check for obstacle (game over if hit)
+      function obstacleCollisionCheck() {
+        const dogCenterX = 85;
+        const dogCenterY = dogY + 77.5;
+        const obstacleCenterX = obstacleX + obstacleRadius;
+        const obstacleCenterY = obstacleY + obstacleRadius;
+        const dx = obstacleCenterX - dogCenterX;
+        const dy = obstacleCenterY - dogCenterY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance <= (dogRadius + obstacleRadius)) {
+          gameOver = true;
+          gameStateElem.innerHTML = "Game Over";
+          gameStateElem.style.padding = "10px";
+          gameSpeed = 0;
+          obstacleVX = 0;
+        }
+      }
+
+      // Collision check for collectible (increase score on collection)
+      function collectibleCollisionCheck() {
+        const dogCenterX = 85;
+        const dogCenterY = dogY + 77.5;
+        const collectibleCenterX = collectibleX + collectibleRadius;
+        const collectibleCenterY = collectibleY + collectibleRadius;
+        const dx = collectibleCenterX - dogCenterX;
+        const dy = collectibleCenterY - dogCenterY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance <= (dogRadius + collectibleRadius)) {
+          score += 5;
+          scoreElem.innerHTML = "Score: " + score;
+          gameSpeed += 0.5;
+          obstacleVX += 0.5;
+          collectibleVX += 0.5;
+          collectibleX = Math.floor(Math.random() * 800 + 800);
+          collectibleY = Math.floor(Math.random() * (groundLevel - 200) + 100);
+        }
+      }
+
+      // --- FRAME AND GRAVITY FUNCTIONS ---
+      function animateFrames() {
+        if (gameFrame % frameControl === 0) {
+          frameX = (frameX < frameNumber - 1) ? frameX + 1 : 0;
+        }
+      }
+
+      function applyGravity() {
+        dogY += dogVY;
+        if (dogY < 430) {
+          dogVY += gravity;
+        } else {
+          dogY = 430;
+          dogVY = 0;
+        }
+      }
+
+      // --- START GAME AFTER ASSETS ARE LOADED ---
+      function startGame() {
+        loadingElem.style.display = "none";
+        animate();
+      }
+
+      // --- KEYBOARD CONTROLS ---
+      document.addEventListener("keydown", function (e) {
+        if (e.code === "ArrowUp") {
+          if (gameOver) return;
+          // Jump if on the ground.
+          if (dogY === 430) {
+            dogVY = -15;
+          }
+        } else if (e.code === "ArrowDown") {
+          if (!gameOver) {
+            // Toggle between sitting and running.
+            if (!isSitting) {
+              gameSpeed = 0;
+              isSitting = true;
+              frameY = 5;
+              frameNumber = 4;
+              obstacleVX = 0;
+              collectibleVX = 0;
+            } else {
+              gameSpeed = 10;
+              isSitting = false;
+              frameY = 3;
+              frameNumber = 6;
+              obstacleVX = 16;
+              collectibleVX = 16;
+            }
+          }
+        } else if (e.code === "KeyR") {
+          resetGame();
+        }
+      });
+
+      // --- RESET GAME ---
+      function resetGame() {
+        cancelAnimationFrame(animationId);
+        gameStateElem.innerHTML = "";
+        gameStateElem.style.padding = "0px";
+        score = 0;
+        scoreElem.innerHTML = "Score: 0";
+        gameOver = false;
+        gameSpeed = 10;
+        dogY = 430;
+        dogVY = 0;
+        frameX = 0;
+        frameY = 3;
+        frameNumber = 6;
+        isSitting = false;
+        obstacleX = 1500;
+        obstacleVX = 16;
+        // Reset obstacle size and position to defaults
+        obstacleSize = 70;
+        obstacleRadius = (obstacleSize / 2) + 5;
+        obstacleY = groundLevel - obstacleSize;
+        collectibleX = 2500;
+        collectibleVX = 16;
+        gameFrame = 0;
+        dustParticles = [];
+        dogDustParticles = [];
+        obstaclePassed = false;
+        animate();
+      }
+    </script>
+  </body>
+</html>
